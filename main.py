@@ -134,7 +134,7 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     )
     if not db_user:
         raise HTTPException(status_code=400, detail="Invalid login or password")
-    return {"message": "Login successful"}
+    return {"message": "Login successful", "user_id": db_user.id}
 
 
 @app.post("/avatars/", response_model=AvatarCreate)
