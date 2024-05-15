@@ -4,4 +4,4 @@ sqlalchemy
 psycopg2-binary
 pydantic
 requests
-openai
+openai==0.28
