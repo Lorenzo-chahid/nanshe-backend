@@ -1,4 +1,4 @@
-# main.py
+import os
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -8,7 +8,8 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 import openai
 from datetime import datetime
 
-DATABASE_URL = "sqlite:///./test.db"
+# Utiliser la variable d'environnement DATABASE_URL si elle est définie, sinon utiliser SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
 Base = declarative_base()
 engine = create_engine(DATABASE_URL)
@@ -16,12 +17,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
 
-# Configure your OpenAI API key
-openai.api_key = "XXXXXXXXXXXXXXXXXXXXX"
+# Configurer la clé API OpenAI à partir des variables d'environnement
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # CORS configuration
 origins = [
     "http://localhost:3000",
+    "https://nanshe-frontend.onrender.com",
 ]
 
 app.add_middleware(
@@ -195,3 +197,9 @@ async def chat(message: Message, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
