@@ -21,7 +21,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 app = FastAPI()
 
 # Configurer la clé API OpenAI à partir des variables d'environnement
-openai.api_key = "sk-proj-bI96LPzftNvpKkEvgEZhT3BlbkFJ1sfZQs6Jc4mVuL6SrCU8"
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # CORS configuration
 origins = [
@@ -150,6 +150,17 @@ def create_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
 def get_avatars(user_id: int, db: Session = Depends(get_db)):
     avatars = db.query(Avatar).filter(Avatar.user_id == user_id).all()
     return avatars
+
+
+@app.get("/conversations/{avatar_id}")
+def get_conversations(avatar_id: int, db: Session = Depends(get_db)):
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.avatar_id == avatar_id)
+        .order_by(Conversation.created_at.asc())
+        .all()
+    )
+    return conversations
 
 
 @app.post("/chat/")
