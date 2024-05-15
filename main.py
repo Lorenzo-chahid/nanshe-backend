@@ -11,6 +11,9 @@ from datetime import datetime
 # Utiliser la variable d'environnement DATABASE_URL si elle est définie, sinon utiliser SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+
 Base = declarative_base()
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -24,6 +27,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 origins = [
     "http://localhost:3000",
     "https://nanshe-frontend.onrender.com",
+    "https://nanshe-frontend.onrender.com/*",
 ]
 
 app.add_middleware(
