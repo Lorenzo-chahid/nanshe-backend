@@ -21,7 +21,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 app = FastAPI()
 
 # Configurer la clé API OpenAI à partir des variables d'environnement
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = "sk-proj-bI96LPzftNvpKkEvgEZhT3BlbkFJ1sfZQs6Jc4mVuL6SrCU8"
 
 # CORS configuration
 origins = [
