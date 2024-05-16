@@ -1,8 +1,18 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    ForeignKey,
+    DateTime,
+    Boolean,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 import openai
@@ -10,6 +20,8 @@ from datetime import datetime
 
 # Utiliser la variable d'environnement DATABASE_URL si elle est définie, sinon utiliser SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
+
+templates = Jinja2Templates(directory="templates")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
@@ -26,6 +38,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # CORS configuration
 origins = [
     "http://localhost:3000",
+    "http://localhost:3000/*",
     "https://nanshe-frontend.onrender.com",
     "https://nanshe-frontend.onrender.com/*",
 ]
@@ -39,12 +52,15 @@ app.add_middleware(
 )
 
 
+# Ajout des nouvelles colonnes dans les modèles SQLAlchemy
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
     password = Column(String)
+    profile_image = Column(String, nullable=True)
+    premium = Column(Boolean, default=False)
     avatars = relationship("Avatar", back_populates="owner")
 
 
@@ -57,6 +73,7 @@ class Avatar(Base):
     personality = Column(String, nullable=True)
     traits = Column(String, nullable=True)
     writing = Column(String)
+    profile_image = Column(String, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     owner = relationship("User", back_populates="avatars")
@@ -80,6 +97,8 @@ class UserCreate(BaseModel):
     username: str
     email: str
     password: str
+    profile_image: str = None
+    premium: bool = False
 
 
 class UserLogin(BaseModel):
@@ -94,6 +113,7 @@ class AvatarCreate(BaseModel):
     personality: str = None
     traits: str = None
     writing: str
+    profile_image: str = None
     user_id: int
 
 
@@ -115,11 +135,35 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    new_user = User(username=user.username, email=user.email, password=user.password)
+    new_user = User(
+        username=user.username,
+        email=user.email,
+        password=user.password,
+        profile_image=user.profile_image,
+        premium=user.premium,
+    )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return new_user
+
+
+@app.post("/avatars/", response_model=AvatarCreate)
+def create_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
+    db_avatar = Avatar(
+        first_name=avatar.first_name,
+        last_name=avatar.last_name,
+        age=avatar.age,
+        personality=avatar.personality,
+        traits=avatar.traits,
+        writing=avatar.writing,
+        profile_image=avatar.profile_image,
+        user_id=avatar.user_id,
+    )
+    db.add(db_avatar)
+    db.commit()
+    db.refresh(db_avatar)
+    return db_avatar
 
 
 @app.post("/login/")
@@ -137,15 +181,6 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     return {"message": "Login successful", "user_id": db_user.id}
 
 
-@app.post("/avatars/", response_model=AvatarCreate)
-def create_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
-    db_avatar = Avatar(**avatar.dict())
-    db.add(db_avatar)
-    db.commit()
-    db.refresh(db_avatar)
-    return db_avatar
-
-
 @app.get("/avatars/{user_id}")
 def get_avatars(user_id: int, db: Session = Depends(get_db)):
     avatars = db.query(Avatar).filter(Avatar.user_id == user_id).all()
@@ -155,12 +190,27 @@ def get_avatars(user_id: int, db: Session = Depends(get_db)):
 @app.get("/conversations/{avatar_id}")
 def get_conversations(avatar_id: int, db: Session = Depends(get_db)):
     conversations = (
-        db.query(Conversation)
+        db.query(Conversation, Avatar.profile_image, User.profile_image)
+        .join(Avatar, Avatar.id == Conversation.avatar_id)
+        .join(User, User.id == Avatar.user_id)
         .filter(Conversation.avatar_id == avatar_id)
         .order_by(Conversation.created_at.asc())
         .all()
     )
-    return conversations
+    result = []
+    for conv, avatar_img, user_img in conversations:
+        result.append(
+            {
+                "id": conv.id,
+                "avatar_id": conv.avatar_id,
+                "user_message": conv.user_message,
+                "avatar_response": conv.avatar_response,
+                "created_at": conv.created_at,
+                "avatar_image": avatar_img,
+                "user_image": user_img,
+            }
+        )
+    return result
 
 
 @app.post("/chat/")
@@ -212,6 +262,17 @@ async def chat(message: Message, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+##### ADMIN ############
+
+
+@app.get("/admin/users/", response_class=HTMLResponse)
+async def admin_list_users(request: Request, db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    return templates.TemplateResponse(
+        "admin_users.html", {"request": request, "users": users}
+    )
 
 
 if __name__ == "__main__":
