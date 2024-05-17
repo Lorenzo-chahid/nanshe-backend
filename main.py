@@ -17,11 +17,19 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 import openai
 from datetime import datetime
+import io
+from elevenlabs import VoiceSettings
+from elevenlabs.client import ElevenLabs
+
 
 # Utiliser la variable d'environnement DATABASE_URL si elle est définie, sinon utiliser SQLite
+ELEVENLABS_API_KEY = "xxxxxxxxxxxx"
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
 templates = Jinja2Templates(directory="templates")
+client = ElevenLabs(
+    api_key=ELEVENLABS_API_KEY,
+)
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
@@ -37,6 +45,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # CORS configuration
 origins = [
+    "*",
     "http://localhost:3000",
     "http://localhost:3000/*",
     "https://nanshe-frontend.onrender.com",
@@ -128,6 +137,43 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def text_to_speech_stream(text: str) -> io.BytesIO:
+    # Perform the text-to-speech conversion
+    print("HEEEEREEE ::: ", text)
+    response = client.text_to_speech.convert(
+        voice_id="pNInz6obpgDQGcFmaJgB",  # Example voice ID
+        text=text,
+        output_format="mp3_22050_32",
+        model_id="eleven_multilingual_v2",
+        voice_settings=VoiceSettings(
+            stability=0.0,
+            similarity_boost=1.0,
+            style=0.0,
+            use_speaker_boost=True,
+        ),
+    )
+
+    # Create a BytesIO object to hold the audio data in memory
+    audio_stream = io.BytesIO()
+    for chunk in response:
+        if chunk:
+            audio_stream.write(chunk)
+    audio_stream.seek(0)  # Rewind the stream to the beginning
+    return audio_stream
+
+
+class SpeechRequest(BaseModel):
+    text: str
+
+
+@app.post("/text-to-speech/")
+async def text_to_speech(request: SpeechRequest):
+    text = request.text
+    audio_stream = text_to_speech_stream(text)
+    print("HEERE MANEKE ::: ", text)
+    return {"message": audio_stream}
 
 
 @app.post("/users/", response_model=UserCreate)
