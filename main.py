@@ -14,7 +14,7 @@ from models import Base, User, Avatar, Conversation, LikedMessage, user_friends
 from schemas import UserCreate, UserLogin, AvatarCreate, Message, SpeechRequest
 from database import engine, get_db
 
-# Utiliser la variable d'environnement ELEVENLABS_API_KEY et OPENAI_API_KEY
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Création des tables dans la base de données
