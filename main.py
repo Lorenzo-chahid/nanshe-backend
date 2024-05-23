@@ -1,49 +1,31 @@
+# backend/main.py
 import os
+import io
+import requests
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    ForeignKey,
-    DateTime,
-    Boolean,
-)
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.orm import Session
 import openai
-from datetime import datetime
-import io
-from elevenlabs import VoiceSettings
-from elevenlabs.client import ElevenLabs
+from fastapi import BackgroundTasks
 
+from models import Base, User, Avatar, Conversation, LikedMessage, user_friends
+from schemas import UserCreate, UserLogin, AvatarCreate, Message, SpeechRequest
+from database import engine, get_db
 
-# Utiliser la variable d'environnement DATABASE_URL si elle est définie, sinon utiliser SQLite
-ELEVENLABS_API_KEY = "xxxxxxxxxxxx"
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
+# Utiliser la variable d'environnement ELEVENLABS_API_KEY et OPENAI_API_KEY
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-templates = Jinja2Templates(directory="templates")
-client = ElevenLabs(
-    api_key=ELEVENLABS_API_KEY,
-)
-
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-
-Base = declarative_base()
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Création des tables dans la base de données
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Configurer la clé API OpenAI à partir des variables d'environnement
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Configuration des templates Jinja2
+templates = Jinja2Templates(directory="templates")
 
-# CORS configuration
+# Configuration CORS
 origins = [
     "*",
     "http://localhost:3000",
@@ -61,136 +43,59 @@ app.add_middleware(
 )
 
 
-# Ajout des nouvelles colonnes dans les modèles SQLAlchemy
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    email = Column(String, unique=True, index=True)
-    password = Column(String)
-    profile_image = Column(String, nullable=True)
-    premium = Column(Boolean, default=False)
-    avatars = relationship("Avatar", back_populates="owner")
-
-
-class Avatar(Base):
-    __tablename__ = "avatars"
-    id = Column(Integer, primary_key=True, index=True)
-    first_name = Column(String, index=True)
-    last_name = Column(String, index=True, nullable=True)
-    age = Column(Integer)
-    personality = Column(String, nullable=True)
-    traits = Column(String, nullable=True)
-    writing = Column(String)
-    profile_image = Column(String, nullable=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    owner = relationship("User", back_populates="avatars")
-    conversations = relationship("Conversation", back_populates="avatar")
-
-
-class Conversation(Base):
-    __tablename__ = "conversations"
-    id = Column(Integer, primary_key=True, index=True)
-    avatar_id = Column(Integer, ForeignKey("avatars.id"))
-    user_message = Column(String)
-    avatar_response = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    avatar = relationship("Avatar", back_populates="conversations")
-
-
-Base.metadata.create_all(bind=engine)
-
-
-class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
-    profile_image: str = None
-    premium: bool = False
-
-
-class UserLogin(BaseModel):
-    login: str
-    password: str
-
-
-class AvatarCreate(BaseModel):
-    first_name: str
-    last_name: str = None
-    age: int
-    personality: str = None
-    traits: str = None
-    writing: str
-    profile_image: str = None
-    user_id: int
-
-
-class Message(BaseModel):
-    avatar_id: int
-    user_message: str
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def text_to_speech_stream(text: str) -> io.BytesIO:
-    # Perform the text-to-speech conversion
-    print("HEEEEREEE ::: ", text)
-    response = client.text_to_speech.convert(
-        voice_id="pNInz6obpgDQGcFmaJgB",  # Example voice ID
-        text=text,
-        output_format="mp3_22050_32",
-        model_id="eleven_multilingual_v2",
-        voice_settings=VoiceSettings(
-            stability=0.0,
-            similarity_boost=1.0,
-            style=0.0,
-            use_speaker_boost=True,
-        ),
+async def analyze_response(response_text: str) -> bool:
+    analysis_prompt = (
+        "Analyze the following response and determine if it implies an action that needs to be completed "
+        "and if a follow-up message is necessary to indicate the completion of that action. "
+        "If a follow-up is needed, return 'true'. Otherwise, return 'false'. "
+        f"Response: {response_text}"
     )
 
-    # Create a BytesIO object to hold the audio data in memory
-    audio_stream = io.BytesIO()
-    for chunk in response:
-        if chunk:
-            audio_stream.write(chunk)
-    audio_stream.seek(0)  # Rewind the stream to the beginning
-    return audio_stream
+    analysis_response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": analysis_prompt}],
+        max_tokens=10,
+    )
+
+    analysis_result = analysis_response.choices[0].message["content"].strip().lower()
+    return "true" in analysis_result
 
 
-class SpeechRequest(BaseModel):
-    text: str
-
-
-@app.post("/text-to-speech/")
-async def text_to_speech(request: SpeechRequest):
-    text = request.text
-    audio_stream = text_to_speech_stream(text)
-    print("HEERE MANEKE ::: ", text)
-    return {"message": audio_stream}
+def print_users_table(db: Session):
+    users = db.query(User).all()
+    print("ID | Username | Email | Password | Profile Image | Premium | Created At")
+    print("---------------------------------------------------------------")
+    for user in users:
+        print(
+            f"{user.id} | {user.username} | {user.email} | {user.password} | {user.profile_image} | {user.premium} | {user.created_at}"
+        )
 
 
 @app.post("/users/", response_model=UserCreate)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user.email).first()
+    db_user = (
+        db.query(User)
+        .filter(or_(User.email == user.email, User.username == user.username))
+        .first()
+    )
     if db_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(
+            status_code=400, detail="Email or username already registered"
+        )
     new_user = User(
         username=user.username,
         email=user.email,
         password=user.password,
         profile_image=user.profile_image,
-        premium=user.premium,
+        premium=False,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Print the users table after adding the new user
+    print_users_table(db)
+
     return new_user
 
 
@@ -200,16 +105,57 @@ def create_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
         first_name=avatar.first_name,
         last_name=avatar.last_name,
         age=avatar.age,
+        gender=avatar.gender,
         personality=avatar.personality,
         traits=avatar.traits,
         writing=avatar.writing,
         profile_image=avatar.profile_image,
+        eye_color=avatar.eye_color,
+        hair_color=avatar.hair_color,
+        weight=avatar.weight,
+        bust_size=avatar.bust_size,
         user_id=avatar.user_id,
     )
     db.add(db_avatar)
     db.commit()
     db.refresh(db_avatar)
     return db_avatar
+
+
+@app.put("/avatar/{avatar_id}", response_model=AvatarCreate)
+def update_avatar(avatar_id: int, avatar: AvatarCreate, db: Session = Depends(get_db)):
+    db_avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
+    if not db_avatar:
+        raise HTTPException(status_code=404, detail="Avatar not found")
+
+    db_avatar.first_name = avatar.first_name
+    db_avatar.last_name = avatar.last_name
+    db_avatar.age = avatar.age
+    db_avatar.gender = avatar.gender
+    db_avatar.personality = avatar.personality
+    db_avatar.traits = avatar.traits
+    db_avatar.writing = avatar.writing
+    db_avatar.profile_image = avatar.profile_image
+    db_avatar.eye_color = avatar.eye_color
+    db_avatar.hair_color = avatar.hair_color
+    db_avatar.weight = avatar.weight
+    db_avatar.bust_size = avatar.bust_size
+    db_avatar.user_id = avatar.user_id
+
+    db.commit()
+    db.refresh(db_avatar)
+    return db_avatar
+
+
+@app.delete("/avatar/{avatar_id}", response_model=dict)
+def delete_avatar(avatar_id: int, db: Session = Depends(get_db)):
+    db_avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
+    if not db_avatar:
+        raise HTTPException(status_code=404, detail="Avatar not found")
+
+    db.delete(db_avatar)
+    db.commit()
+    return {"message": "Avatar deleted successfully"}
 
 
 @app.post("/login/")
@@ -233,8 +179,23 @@ def get_avatars(user_id: int, db: Session = Depends(get_db)):
     return avatars
 
 
+@app.get("/avatar/{avatar_id}", response_model=AvatarCreate)
+def get_avatar(avatar_id: int, db: Session = Depends(get_db)):
+    try:
+        avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
+        if not avatar:
+            print(f"Avatar with ID {avatar_id} not found.")
+            raise HTTPException(status_code=404, detail="Avatar not found")
+        print(f"Fetched avatar: {avatar}")
+        return avatar
+    except Exception as e:
+        print(f"Error fetching avatar: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/conversations/{avatar_id}")
 def get_conversations(avatar_id: int, db: Session = Depends(get_db)):
+    avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
     conversations = (
         db.query(Conversation, Avatar.profile_image, User.profile_image)
         .join(Avatar, Avatar.id == Conversation.avatar_id)
@@ -278,7 +239,12 @@ async def chat(message: Message, db: Session = Depends(get_db)):
         messages = [
             {
                 "role": "system",
-                "content": f"You are an AI playing the role of {avatar.first_name} {avatar.last_name}, a {avatar.age} years old avatar with a {avatar.personality} personality and {avatar.traits} traits. The writing style is {avatar.writing}.",
+                "content": (
+                    f"You are an AI playing the role of {avatar.first_name} {avatar.last_name}, a {avatar.age} years old avatar "
+                    f"with a {avatar.personality} personality and {avatar.traits} traits. The writing style is {avatar.writing}. "
+                    "You must stay in character at all times and never reveal that you are an AI or a language model. "
+                    "Respond as if you are the character in every situation."
+                ),
             }
         ]
 
@@ -310,7 +276,50 @@ async def chat(message: Message, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-##### ADMIN ############
+@app.post("/generate-image/")
+async def generate_image(request: Request):
+    body = await request.json()
+    physical = body.get("physical", {})
+    gender = body.get("gender", "")
+
+    if not physical or not gender:
+        raise HTTPException(
+            status_code=400, detail="Physical data and gender are required"
+        )
+
+    # Create a prompt based on the physical data and gender
+    prompt = f"a nude woman"
+    for k, v in physical.items():
+        print("MANNEKE :: ", k, "------", v)
+
+    url = "https://api.getimg.ai/v1/stable-diffusion-xl/text-to-image"
+    payload = {
+        "model": "stable-diffusion-xl-v1-0",
+        "prompt": "une image photo réaliste d'une femme nue en train d'avoir un orgasme. sa poitrine fera du 90D",
+        "output_format": "jpeg",
+    }
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "authorization": "Bearer key-1vj7bYgbfSeukCo7rqzlUsiIh4IPfGwBiq0Rplq6jNfWa4TkliByMg4rzLaMg65eW3LDu1UdT5yJhawCuSN7h6MpSSmEzCRA",
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code, detail="Failed to generate image"
+        )
+
+    try:
+        response_json = response.json()
+        image_data = response_json["image"]
+    except (KeyError, ValueError) as e:
+        raise HTTPException(
+            status_code=500, detail="Invalid response from image generation API"
+        )
+
+    return {"image": image_data}
 
 
 @app.get("/admin/users/", response_class=HTMLResponse)
