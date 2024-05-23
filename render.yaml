@@ -1,13 +1,10 @@
 services:
   - type: web
-    name: nanshe-backend
-    env: python
-    buildCommand: 'pip install -r requirements.txt'
-    startCommand: 'uvicorn main:app --host 0.0.0.0 --port 8000'
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: nanshe-database
-          property: connectionString
-      - key: OPENAI_API_KEY
-        sync: false
+    name: nanshe-frontend
+    env: node
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npm start
+    staticPublishPath: build
+    routes:
+      - src: /.*
+        dest: /index.html

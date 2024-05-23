@@ -28,10 +28,6 @@ templates = Jinja2Templates(directory="templates")
 # Configuration CORS
 origins = [
     "*",
-    "http://localhost:3000",
-    "http://localhost:3000/*",
-    "https://nanshe-frontend.onrender.com",
-    "https://nanshe-frontend.onrender.com/*",
 ]
 
 app.add_middleware(
