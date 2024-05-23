@@ -2,6 +2,7 @@
 import os
 import io
 import requests
+from sqlalchemy import or_
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -28,6 +29,10 @@ templates = Jinja2Templates(directory="templates")
 # Configuration CORS
 origins = [
     "*",
+    "http://localhost:3000",
+    "http://localhost:3000/*",
+    "https://nanshe-frontend.onrender.com",
+    "https://nanshe-frontend.onrender.com/*",
 ]
 
 app.add_middleware(
