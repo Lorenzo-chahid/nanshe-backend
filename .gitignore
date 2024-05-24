@@ -1,2 +1,11 @@
-.env
+__pycache__/main.cpython-310.pyc
+__pycache__/models.cpython-310.pyc
+__pycache__/schemas.cpython-310.pyc
+__pycache__/
+__pycache__/*
+
 venv/
+venv/*
+
+
+.env
