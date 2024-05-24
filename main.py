@@ -3,18 +3,25 @@ import os
 import io
 import requests
 from sqlalchemy import or_
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 import openai
-from fastapi import BackgroundTasks
 
-from models import Base, User, Avatar, Conversation, LikedMessage, user_friends
+from models import (
+    AvatarSkill,
+    Base,
+    User,
+    Avatar,
+    Conversation,
+    LikedMessage,
+    user_friends,
+)
 from schemas import UserCreate, UserLogin, AvatarCreate, Message, SpeechRequest
 from database import engine, get_db
-
+from ia_analyzer import ImageAnalyzer
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -43,23 +50,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+image_analyzer = ImageAnalyzer()
 
-async def analyze_response(response_text: str) -> bool:
-    analysis_prompt = (
-        "Analyze the following response and determine if it implies an action that needs to be completed "
-        "and if a follow-up message is necessary to indicate the completion of that action. "
-        "If a follow-up is needed, return 'true'. Otherwise, return 'false'. "
-        f"Response: {response_text}"
+
+def calculate_experience_for_next_level(level):
+    return 50 * (2 ** (level // 5))
+
+
+def update_experience(db_avatar: Avatar, xp: float, db: Session):
+    db_avatar.experience += xp
+    level_up = False
+
+    while db_avatar.experience >= calculate_experience_for_next_level(db_avatar.level):
+        db_avatar.experience -= calculate_experience_for_next_level(db_avatar.level)
+        db_avatar.level += 1
+        level_up = True
+
+        if db_avatar.level >= 5 and db_avatar.level < 15:
+            db_avatar.relationship_status = "connaissance"
+        elif db_avatar.level >= 15 and db_avatar.level < 25:
+            db_avatar.relationship_status = "ami"
+        elif db_avatar.level >= 25:
+            db_avatar.relationship_status = "sentimental"
+
+    db.commit()
+    db.refresh(db_avatar)
+
+    return level_up
+
+
+def upgrade_skill(db: Session, avatar_id: int, skill_name: str):
+    skill = (
+        db.query(AvatarSkill)
+        .filter(
+            AvatarSkill.avatar_id == avatar_id, AvatarSkill.skill_name == skill_name
+        )
+        .first()
     )
+    if not skill:
+        skill = AvatarSkill(avatar_id=avatar_id, skill_name=skill_name, level=1)
+        db.add(skill)
+    else:
+        skill.level += 1
 
-    analysis_response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": analysis_prompt}],
-        max_tokens=10,
-    )
-
-    analysis_result = analysis_response.choices[0].message["content"].strip().lower()
-    return "true" in analysis_result
+    db.commit()
+    db.refresh(skill)
+    return skill
 
 
 def print_users_table(db: Session):
@@ -69,6 +105,16 @@ def print_users_table(db: Session):
     for user in users:
         print(
             f"{user.id} | {user.username} | {user.email} | {user.password} | {user.profile_image} | {user.premium} | {user.created_at}"
+        )
+
+
+def print_avatar_table(db: Session):
+    avatar = db.query(Avatar).all()
+    print("ID | First Name | Skills | Experience | Profile Image")
+    print("---------------------------------------------------------------")
+    for av in avatar:
+        print(
+            f"{av.id} | {av.first_name} | {av.skills} | {av.experience} | {av.profile_image} | "
         )
 
 
@@ -124,7 +170,13 @@ def create_avatar(avatar: AvatarCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/avatar/{avatar_id}", response_model=AvatarCreate)
-def update_avatar(avatar_id: int, avatar: AvatarCreate, db: Session = Depends(get_db)):
+def update_avatar(
+    avatar_id: int,
+    avatar: AvatarCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    print_avatar_table(db)
     db_avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
     if not db_avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
@@ -145,7 +197,49 @@ def update_avatar(avatar_id: int, avatar: AvatarCreate, db: Session = Depends(ge
 
     db.commit()
     db.refresh(db_avatar)
+
+    if db_avatar.profile_image:
+        background_tasks.add_task(
+            update_avatar_physical_description,
+            db_avatar.profile_image,
+            db_avatar.id,
+            db,
+        )
+
     return db_avatar
+
+
+@app.post("/avatar/{avatar_id}/experience")
+def add_experience(avatar_id: int, xp: int, db: Session = Depends(get_db)):
+    db_avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
+    if not db_avatar:
+        raise HTTPException(status_code=404, detail="Avatar not found")
+
+    level_up = update_experience(db_avatar, xp, db)
+    return {"message": "Experience added", "level_up": level_up}
+
+
+@app.post("/avatar/{avatar_id}/skill")
+def upgrade_avatar_skill(
+    avatar_id: int, skill_name: str, db: Session = Depends(get_db)
+):
+    skill = upgrade_skill(db, avatar_id, skill_name)
+    return {"message": "Skill upgraded", "skill": skill}
+
+
+def update_avatar_physical_description(
+    profile_image_url: str, avatar_id: int, db: Session
+):
+    try:
+        description = image_analyzer.analyze_image(profile_image_url)
+        print("HERE :: ", description)
+        db_avatar = db.query(Avatar).filter(Avatar.id == avatar_id).first()
+        if db_avatar:
+            db_avatar.physical_description = description
+            db.commit()
+            db.refresh(db_avatar)
+    except Exception as e:
+        print(f"Error updating avatar physical description: {e}")
 
 
 @app.delete("/avatar/{avatar_id}", response_model=dict)
@@ -269,6 +363,10 @@ async def chat(message: Message, db: Session = Depends(get_db)):
         )
         db.add(new_conversation)
         db.commit()
+
+        # Update experience for both receiving and sending messages
+        update_experience(avatar, 0.5, db)  # Receiving message
+        update_experience(avatar, 1, db)  # Sending message
 
         return {"avatar_response": ai_response}
 

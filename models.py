@@ -52,15 +52,31 @@ class Avatar(Base):
     personality = Column(String, nullable=True)
     traits = Column(String, nullable=True)
     writing = Column(String)
-    profile_image = Column(String, nullable=True)
+    profile_image = Column(
+        String,
+        default="https://fac.img.pmdstatic.net/fit/http.3A.2F.2Fprd2-bone-image.2Es3-website-eu-west-1.2Eamazonaws.2Ecom.2FFAC.2Fvar.2Ffemmeactuelle.2Fstorage.2Fimages.2Famour.2Fcoaching-amoureux.2Fcest-quoi-belle-femme-temoignages-43206.2F14682625-1-fre-FR.2Fc-est-quoi-une-belle-femme-temoignages.2Ejpg/970x485/quality/80/crop-from/center/c-est-quoi-une-belle-femme-temoignages.jpeg",
+    )
     eye_color = Column(String, nullable=True)
     hair_color = Column(String, nullable=True)
     weight = Column(Integer, nullable=True)
     bust_size = Column(String, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+    level = Column(Integer, default=1)
+    experience = Column(Integer, default=0)
+    relationship_status = Column(String, default="inconnu")
     owner = relationship("User", back_populates="avatars")
     conversations = relationship("Conversation", back_populates="avatar")
+    skills = relationship("AvatarSkill", back_populates="avatar")
+
+
+class AvatarSkill(Base):
+    __tablename__ = "avatar_skills"
+    id = Column(Integer, primary_key=True, index=True)
+    avatar_id = Column(Integer, ForeignKey("avatars.id"))
+    skill_name = Column(String)
+    level = Column(Integer, default=1)
+    avatar = relationship("Avatar", back_populates="skills")
 
 
 class Conversation(Base):

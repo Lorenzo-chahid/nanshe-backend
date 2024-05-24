@@ -1,6 +1,6 @@
 # backend/schemas.py
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -17,6 +17,14 @@ class UserLogin(BaseModel):
     password: str
 
 
+class AvatarSkill(BaseModel):
+    skill_name: str
+    level: int
+
+    class Config:
+        from_attribute = True
+
+
 class AvatarCreate(BaseModel):
     first_name: str
     last_name: Optional[str] = None
@@ -31,6 +39,10 @@ class AvatarCreate(BaseModel):
     bust_size: Optional[str] = None
     profile_image: Optional[str] = None
     user_id: int
+    level: int = 1
+    experience: float = 0
+    relationship_status: str = "inconnu"
+    skills: Optional[List[AvatarSkill]] = []
 
     class Config:
         from_attribute = True
@@ -43,3 +55,11 @@ class Message(BaseModel):
 
 class SpeechRequest(BaseModel):
     text: str
+
+
+class LikedMessage(BaseModel):
+    user_id: int
+    message_id: int
+
+    class Config:
+        from_attribute = True
